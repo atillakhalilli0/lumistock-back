@@ -24,7 +24,7 @@ const productSchema = z.object({
 const productUpdateSchema = productSchema.partial();
 
 // NOTE: /lookup must be registered before /:id so it isn't swallowed by the param route
-// router.get('/lookup', controller.lookupByBarcode);
+router.get('/lookup', controller.lookupByBarcode);
 router.get('/', controller.list);
 router.post('/', validate(productSchema), controller.create);
 router.get('/:id', controller.getOne);
