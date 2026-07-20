@@ -16,6 +16,8 @@ const warehouseUpdateSchema = warehouseSchema.partial();
 const zoneSchema = z.object({ code: z.string().min(1), name: z.string().optional() });
 const shelfSchema = z.object({
   code: z.string().min(1),
+  row_label: z.string().optional(),
+  col_label: z.string().optional(),
   capacity: z.number().int().positive().optional(),
   current_fill: z.number().int().min(0).optional(),
 });
