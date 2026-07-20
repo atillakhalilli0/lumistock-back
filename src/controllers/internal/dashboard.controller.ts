@@ -22,7 +22,10 @@ export async function getSalesChart(
 ) {
   try {
     res.json(
-      await service.getSalesChart(req.query.company_id as string | undefined)
+      await service.getSalesChart(
+        req.query.company_id as string | undefined,
+        req.query.range as string | undefined
+      )
     );
   } catch (err) {
     next(err);
@@ -36,7 +39,10 @@ export async function getCashFlow(
 ) {
   try {
     res.json(
-      await service.getCashFlow(req.query.company_id as string | undefined)
+      await service.getCashFlow(
+        req.query.company_id as string | undefined,
+        req.query.range as string | undefined
+      )
     );
   } catch (err) {
     next(err);

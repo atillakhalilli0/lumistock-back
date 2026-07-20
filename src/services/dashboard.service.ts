@@ -1,8 +1,51 @@
 import { supabase } from "../lib/supabaseClient.js";
 import { AppError } from "../utils/appError.js";
 
+// ---- date helpers -----------------------------------------------------
+
+function parseRangeDays(range?: string): number {
+  if (!range) return 7;
+  const match = /^(\d+)d$/.exec(range);
+  if (!match) return 7;
+  return Math.max(1, Math.min(90, Number(match[1])));
+}
+
+function isoDay(date: Date): string {
+  return date.toISOString().slice(0, 10);
+}
+
+function dayLabel(isoDateStr: string): string {
+  const d = new Date(`${isoDateStr}T00:00:00Z`);
+  return d.toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    timeZone: "UTC",
+  });
+}
+
+/** Ascending list of 'YYYY-MM-DD' strings for the last `days` days, including today. */
+function buildDayRange(days: number): string[] {
+  const result: string[] = [];
+  const today = new Date();
+  for (let i = days - 1; i >= 0; i--) {
+    const d = new Date(today);
+    d.setUTCDate(d.getUTCDate() - i);
+    result.push(isoDay(d));
+  }
+  return result;
+}
+
+function rangeStartDate(days: number): Date {
+  const since = new Date();
+  since.setUTCDate(since.getUTCDate() - (days - 1));
+  since.setUTCHours(0, 0, 0, 0);
+  return since;
+}
+
+// ---- KPIs ---------------------------------------------------------------
+
 export async function getDashboardKpis(companyId?: string) {
-  let orders = supabase.from("orders").select("total");
+  let orders = supabase.from("orders").select("total,created_at");
   let debts = supabase.from("customer_debts").select("remaining_amount");
   let batches = supabase.from("product_batches").select("quantity,buy_price");
 
@@ -42,60 +85,104 @@ export async function getDashboardKpis(companyId?: string) {
   const receivables =
     debtsData?.reduce((s, d) => s + Number(d.remaining_amount ?? 0), 0) ?? 0;
 
+  // Build a real multi-point trend for sales from the last 7 days of orders,
+  // so the KpiCard sparkline has more than one point to draw.
+  const trendDays = buildDayRange(7);
+  const byDay = new Map<string, number>();
+  for (const o of ordersData ?? []) {
+    if (!o.created_at) continue;
+    const day = isoDay(new Date(o.created_at));
+    byDay.set(day, (byDay.get(day) ?? 0) + Number(o.total ?? 0));
+  }
+  const salesTrend = trendDays.map((day) => ({
+    value: Math.round((byDay.get(day) ?? 0) * 100) / 100,
+  }));
+
+  // stockValue and receivables are point-in-time snapshots — there's no
+  // history table to derive a real trend from yet, so we surface the
+  // current value as a flat two-point line rather than a single point
+  // (a single point renders nothing in the sparkline).
+  const flatTrend = (value: number) => [{ value }, { value }];
+
   return {
     dailySales: {
       value: monthlyRevenue,
-      trend: [{ value: monthlyRevenue }],
+      trend: salesTrend,
     },
     monthlyRevenue: {
       value: monthlyRevenue,
-      trend: [{ value: monthlyRevenue }],
+      trend: salesTrend,
     },
     stockValue: {
       value: stockValue,
-      trend: [{ value: stockValue }],
+      trend: flatTrend(stockValue),
     },
     totalReceivables: {
       value: receivables,
-      trend: [{ value: receivables }],
+      trend: flatTrend(receivables),
     },
   };
 }
 
-export async function getSalesChart(companyId?: string) {
+// ---- Sales chart ----------------------------------------------------------
+
+export async function getSalesChart(companyId?: string, range?: string) {
+  const days = parseRangeDays(range);
+  const since = rangeStartDate(days);
+
   let q = supabase
     .from("orders")
     .select("created_at,total")
+    .gte("created_at", since.toISOString())
     .order("created_at", { ascending: true });
 
   if (companyId) q = q.eq("company_id", companyId);
 
   const { data, error } = await q;
-
   if (error) throw AppError.internal(error.message);
 
-  return (data ?? []).map((x) => ({
-    date: x.created_at,
-    value: Number(x.total),
+  const byDay = new Map<string, number>();
+  for (const row of data ?? []) {
+    const day = isoDay(new Date(row.created_at));
+    byDay.set(day, (byDay.get(day) ?? 0) + Number(row.total ?? 0));
+  }
+
+  return buildDayRange(days).map((day) => ({
+    label: dayLabel(day),
+    total: Math.round((byDay.get(day) ?? 0) * 100) / 100,
   }));
 }
 
-export async function getCashFlow(companyId?: string) {
+// ---- Cash flow --------------------------------------------------------
+
+export async function getCashFlow(companyId?: string, range?: string) {
+  const days = parseRangeDays(range);
+  const since = rangeStartDate(days);
+
   let q = supabase
     .from("orders")
     .select("created_at,total")
-    .order("created_at");
+    .gte("created_at", since.toISOString())
+    .order("created_at", { ascending: true });
 
   if (companyId) q = q.eq("company_id", companyId);
 
   const { data, error } = await q;
-
   if (error) throw AppError.internal(error.message);
 
-  return (data ?? []).map((x) => ({
-    date: x.created_at,
-    income: Number(x.total),
-    expense: 0,
+  // Inflow = order totals per day. There's no expense/purchase-cost data
+  // wired up on this endpoint yet, so outflow stays 0 (same simplification
+  // as before, just aggregated and renamed to match the chart's props).
+  const byDay = new Map<string, number>();
+  for (const row of data ?? []) {
+    const day = isoDay(new Date(row.created_at));
+    byDay.set(day, (byDay.get(day) ?? 0) + Number(row.total ?? 0));
+  }
+
+  return buildDayRange(days).map((day) => ({
+    label: dayLabel(day),
+    inflow: Math.round((byDay.get(day) ?? 0) * 100) / 100,
+    outflow: 0,
   }));
 }
 
